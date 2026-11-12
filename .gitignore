@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+
+# Environments
+.venv/
+venv/
+env/
+code/.venv/
+
+# Datasets and large artefacts (download with code/scripts instead)
+code/data/
+data/raw/
+*.csv.gz
+*.npz
+*.npy
+*.h5
+*.parquet
+*.zip
+*.tar.gz
+
+# Model checkpoints and run outputs
+*.pt
+*.pth
+*.ckpt
+code/results/
+code/runs/
+code/logs/
+wandb/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Never commit credentials
+*.pem
+*.key
+.env
+secrets*
