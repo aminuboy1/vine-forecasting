@@ -1,0 +1,14 @@
+# Hyper-parameter tuning on the 5% validation segment run as a mini online stream (never on test).
+_base_: _base.yaml
+name: etth2_val_tuning
+dataset: {name: ETTh2}
+horizons: [24]
+protocol: {segment: val, delay_factors: [1]}
+seeds: [0]
+methods:
+  - {type: frozen}
+  - {type: rls, n_lags: 1, lam: 0.99, name: rls_p1_l0.99}
+  - {type: rls, n_lags: 2, lam: 0.999, name: rls_p2_l0.999}
+  - {type: rls, n_lags: 4, lam: 0.9999, name: rls_p4_l0.9999}
+  - {type: elf, update_every: 100, name: elf_M100}
+  - {type: elf, update_every: 200, name: elf_M200}

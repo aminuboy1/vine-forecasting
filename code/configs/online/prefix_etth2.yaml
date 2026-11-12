@@ -1,0 +1,12 @@
+# P-prefix secondary protocol: l = d - H by default (l in {0, H, 3H} for d in {H, 2H, 4H}).
+_base_: _base.yaml
+name: etth2_prefix
+dataset: {name: ETTh2}
+horizons: [24, 96]
+protocol: {mode: prefix, delay_factors: [1, 2, 4]}
+methods:
+  - {type: frozen}
+  - {type: ogd, scope: head, lr: 0.0001, batch: 1, use_prefix: false, name: ogd_head_matured_only}
+  - {type: ogd, scope: head, lr: 0.0001, batch: 1, use_prefix: true, name: ogd_head_prefix}
+  - {type: rls, n_lags: 2, lam: 0.999}
+  - {type: elf}

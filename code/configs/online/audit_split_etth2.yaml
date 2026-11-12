@@ -1,0 +1,7 @@
+# Audit replication split 25:5:70 (supplement), for direct comparability with arXiv 2610.12232.
+_base_: _base.yaml
+name: etth2_audit_split
+split: {scheme: audit}
+dataset: {name: ETTh2}
+horizons: [24, 96]
+protocol: {delay_factors: [1, 2, 4]}

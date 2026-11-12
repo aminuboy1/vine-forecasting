@@ -1,0 +1,6 @@
+_base_: _base.yaml
+name: ettm1_delay_sweep
+dataset: {name: ETTm1}
+horizons: [24, 48, 96]
+protocol: {delay_factors: [1, 2, 4]}
+seeds: [0, 1, 2]

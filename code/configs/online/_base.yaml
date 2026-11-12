@@ -1,0 +1,28 @@
+# Shared defaults for online (OTSF) experiments. Override per experiment via `_base_: _base.yaml`.
+harness: online
+split: {scheme: fsnet}            # 20:5:75 chronological split; scaler fitted on train rows only
+L: 96                             # equal lookback for every method
+horizons: [24]
+protocol:
+  mode: strict                    # strict (P-strict) | prefix (P-prefix) | leaky (allow_leaky: true; appendix only)
+  prefix_lag: null                # P-prefix lag l (null -> d - H)
+  segment: test                   # test | val (val = 5% validation segment as a mini online stream, for tuning)
+  provisional: null               # e.g. {phi: 0.9, sd_frac: 0.3, seed: 12345} -> inputs != labels stress test
+  delays: [null]                  # null -> d = H (truthful). Or use delay_factors: [1, 2, 4]
+  allow_leaky: false
+  check_leaks: true
+  max_forecasts: null             # null -> whole test split (drop_last=False)
+backbone: {name: DLinear}
+pretrain: {epochs: 10, lr: 0.001, batch_size: 32, patience: 3}
+methods:
+  - {type: frozen}
+  - {type: ogd, scope: full, lr: 0.0001, batch: 1}
+  - {type: ogd, scope: head, lr: 0.0001, batch: 1}
+  - {type: periodic, period_frac: 0.1, epochs: 1, lr: 0.0001, max_steps: 500}   # every 10% of the stream, all data seen
+  - {type: rls, n_lags: 2, lam: 0.999}
+  - {type: elf}
+runtime: {device: auto, threads: null, online_threads: 1, deterministic: true, forecast_cache_bytes: 1.5e9}
+# threads: pretraining + batched backbone inference (null -> physical cores or $TSL_THREADS)
+# online_threads: per-step corrector loop (1 = single-core latency, as in the methodology)
+seeds: [0, 1, 2]
+output: {dir: results, save_steps: true}

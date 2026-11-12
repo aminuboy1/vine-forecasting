@@ -1,0 +1,6 @@
+# Two-channel stress test (methodology 7.6): inputs x = y + AR(1) noise, labels y settled and released at s+d.
+_base_: _base.yaml
+name: etth2_provisional
+dataset: {name: ETTh2}
+horizons: [24, 96]
+protocol: {delay_factors: [1, 4], provisional: {phi: 0.9, sd_frac: 0.3, seed: 12345}}

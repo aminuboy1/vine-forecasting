@@ -1,0 +1,6 @@
+# APPENDIX ONLY: FSNet/OneNet-style leaky protocol, to bridge to legacy numbers. Results are tagged LEAKY.
+_base_: _base.yaml
+name: etth2_leaky_appendix
+dataset: {name: ETTh2}
+horizons: [24, 48, 96]
+protocol: {mode: leaky, allow_leaky: true, check_leaks: false, delays: [null]}

@@ -1,0 +1,9 @@
+# Install torch separately (CPU or the CUDA build matching your driver), see README.md / server_setup.sh.
+# Versions tested on the laptop (Windows 11, Python 3.12): torch 2.15.0+cpu, numpy 2.5.4, pandas 3.1.1,
+# scipy 1.18.1, pyyaml 6.0.3, pytest 9.2.0, gdown 6.5.1. Lower bounds below are what the code needs.
+numpy>=1.26
+pandas>=2.1
+scipy>=1.11
+pyyaml>=6.0
+pytest>=8.0
+gdown>=5.2        # only for scripts/download_streams.py (Google Drive -Stream data)

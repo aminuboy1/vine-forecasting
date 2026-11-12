@@ -1,0 +1,12 @@
+_base_: _base.yaml
+name: traffic_delay_sweep
+dataset: {name: Traffic}
+horizons: [24, 48, 96]
+protocol: {delay_factors: [1, 2, 4]}
+seeds: [0, 1, 2]
+# Wide stream: deep per-step baselines (full OGD, periodic retrain) are full-tier only on the laptop.
+methods:
+  - {type: frozen}
+  - {type: ogd, scope: head, lr: 0.0001, batch: 1}
+  - {type: rls, n_lags: 2, lam: 0.999}
+  - {type: elf}

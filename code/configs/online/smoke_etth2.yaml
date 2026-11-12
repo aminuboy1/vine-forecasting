@@ -1,0 +1,17 @@
+# SMOKE TEST ONLY: tiny CPU run to check the pipeline end-to-end. Not a result.
+_base_: _base.yaml
+name: smoke_online_etth2
+dataset: {name: ETTh2}
+L: 96
+horizons: [24]
+protocol: {delays: [null, 96], max_forecasts: 3000}
+backbone: {name: DLinear}
+pretrain: {epochs: 3, lr: 0.001, batch_size: 64, patience: 2}
+methods:
+  - {type: frozen}
+  - {type: ogd, scope: head, lr: 0.0001, batch: 1}
+  - {type: ogd, scope: full, lr: 0.0001, batch: 1}
+  - {type: periodic, period: 1000, epochs: 1, lr: 0.0001, max_steps: 100}
+  - {type: rls, n_lags: 2, lam: 0.999}
+  - {type: elf, update_every: 200}
+seeds: [0]

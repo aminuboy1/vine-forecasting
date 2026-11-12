@@ -1,0 +1,7 @@
+# OPSD-IT hourly load (COVID-19 shift inside the online segment). Licence of OPSD bundle: verify (DATASETS.md).
+_base_: _base.yaml
+name: opsd_it_delay_sweep
+dataset: {name: OPSD-IT}
+horizons: [24, 48, 96]
+protocol: {delay_factors: [1, 2, 4, 8]}
+seeds: [0, 1, 2]

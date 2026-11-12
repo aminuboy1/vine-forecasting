@@ -1,0 +1,7 @@
+# Headline-protocol template (paper 2): truthful delay sweep d in {H, 2H, 4H} on the stress-case dataset.
+_base_: _base.yaml
+name: etth2_delay_sweep
+dataset: {name: ETTh2}
+horizons: [24, 48, 96]
+protocol: {delay_factors: [1, 2, 4]}
+seeds: [0, 1, 2, 3, 4]

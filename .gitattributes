@@ -1,0 +1,5 @@
+# Keep Unix line endings for shell scripts committed from Windows (otherwise bash on Linux fails)
+*.sh text eol=lf
+*.py text eol=lf
+*.yaml text eol=lf
+*.md text eol=lf
