@@ -56,7 +56,14 @@ def setup_runtime(device: str = "auto", threads: int | None = None) -> torch.dev
         pass  # can only be set once per process
     torch.set_default_dtype(torch.float32)
     if device == "auto":
-        if torch.cuda.is_available():
+        cuda_ok = torch.cuda.is_available()
+        if cuda_ok:                        # shared GPUs can be full: fall back to CPU instead of crashing later
+            try:
+                torch.zeros(1, device="cuda")
+            except RuntimeError as e:
+                print(f"[setup_runtime] CUDA unusable ({str(e).splitlines()[0]}); using CPU", flush=True)
+                cuda_ok = False
+        if cuda_ok:
             device = "cuda"
         elif getattr(torch.backends, "mps", None) is not None and torch.backends.mps.is_available():
             device = "mps"
