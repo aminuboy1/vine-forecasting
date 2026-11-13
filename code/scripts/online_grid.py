@@ -17,6 +17,7 @@ import hashlib
 import itertools
 import json
 import sys
+import copy
 import time
 from pathlib import Path
 
@@ -68,9 +69,69 @@ METHODS = {
     "ogd_head": ({"type": "ogd", "scope": "head", "lr": 1e-4, "batch": 1}, {"lr": [1e-5, 3e-5, 1e-4, 3e-4, 1e-3]}),
     "periodic": ({"type": "periodic", "period_frac": 0.1, "epochs": 1, "lr": 1e-4, "max_steps": 500},
                  {"lr": [3e-5, 1e-4, 3e-4]}),
+    # ---- amendment 2026-11-14 (frozen before any confirmation-stream result): revision learning as a plug-in layer.
+    # Memory of the VINE family and of its same-feature controls is FIXED long (gamma = 0.9998, half-life ~3466 steps
+    # ~ DRiC's published 128-block half-life at H = 24): the 5% validation stream cannot identify long memories.
+    # Headline: VINE-lambda stacked on the validation-tuned DRiC-L8.
+    "vine_s": ({"type": "stack", "base": "@dric_l8",
+                "top": {"type": "vine_lam", "gamma": 0.9998, "gamma_a": 0.9998}},
+               {"top.lam": [0.25, 0.5, 0.75, 0.9], "top.ridge": [1.0, 10.0, 100.0], "top.gate": [0, 32],
+                "top.k_lb": [0, 4]}),
+    # control: identical stack, base, features and memory, label-only top layer (isolates revision learning)
+    "vine_s_lo": ({"type": "stack", "base": "@dric_l8", "top": {"type": "mc_ls_pr", "gamma_m": 0.9998}},
+                  {"top.ridge": [1.0, 10.0, 100.0], "top.gate": [0, 32], "top.k_lb": [0, 4], "top.clip": [3.0, 5.0]}),
+    # ablation: pure revision fixed point on top (lambda = 1, kappa tuned)
+    "vine_s_pure": ({"type": "stack", "base": "@dric_l8", "top": {"type": "vine", "gamma": 0.9998, "gamma_a": 0.9998}},
+                    {"top.ridge": [1.0, 10.0, 100.0], "top.gate": [0, 32], "top.k_lb": [0, 4],
+                     "top.kappa": [0.8, 0.9, 0.95, 1.0]}),
+    # ablation: the same top layer without the base (does stacking matter?)
+    "vine_lam_lm": ({"type": "vine_lam", "gamma": 0.9998, "gamma_a": 0.9998},
+                    {"lam": [0.25, 0.5, 0.75, 0.9], "ridge": [1.0, 10.0, 100.0], "gate": [0, 32], "k_lb": [0, 4]}),
 }
 CODE_VERSION = "2026-11-13c"      # bump when a method's code changes, to invalidate cached tuning
 WIDE_SKIP = {"dric_l8", "ogd_head", "periodic"}           # H copies of per-channel learners: too heavy for C > 300 (DRiC-G is kept)
+
+
+def nest(cfg: dict) -> dict:
+    """Dotted keys ("top.lam": 0.5) -> nested specs (for stacked methods)."""
+    out = copy.deepcopy({k: v for k, v in cfg.items() if "." not in k})
+    for k, v in cfg.items():
+        if "." in k:
+            node = out
+            *path, leaf = k.split(".")
+            for q in path:
+                node = node.setdefault(q, {})
+            node[leaf] = v
+    return out
+
+
+def space_hash(name: str, a) -> str:
+    """Hash of a method's search space (+ the hashes of the methods it references)."""
+    default, space = METHODS[name]
+    rs = sorted(set(refs(default)) | set(refs(space)))
+    return hashlib.sha256(json.dumps([default, space, a.budget, a.tune_dfac, CODE_VERSION]
+                                     + [space_hash(r, a) for r in rs], sort_keys=True).encode()).hexdigest()[:16]
+
+
+def refs(obj) -> list[str]:
+    """Names referenced as "@name" (= that method's validation-tuned configuration at the same delay)."""
+    if isinstance(obj, str):
+        return [obj[1:]] if obj.startswith("@") else []
+    if isinstance(obj, dict):
+        return [r for v in obj.values() for r in refs(v)]
+    if isinstance(obj, list):
+        return [r for v in obj for r in refs(v)]
+    return []
+
+
+def resolve(obj, tuning: dict, fd: int):
+    if isinstance(obj, str) and obj.startswith("@"):
+        return resolve(copy.deepcopy(tuning[obj[1:]]["best_by_dfac"][str(fd)]), tuning, fd)
+    if isinstance(obj, dict):
+        return {k: resolve(v, tuning, fd) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [resolve(v, tuning, fd) for v in obj]
+    return obj
 
 
 def sample_configs(default: dict, space: dict, budget: int, seed: int) -> list[dict]:
@@ -83,7 +144,7 @@ def sample_configs(default: dict, space: dict, budget: int, seed: int) -> list[d
     for i in rng.permutation(len(grid)):
         if len(out) >= budget:
             break
-        cfg = {**default, **dict(zip(keys, grid[i]))}
+        cfg = nest({**default, **dict(zip(keys, grid[i]))})
         if cfg not in out:
             out.append(cfg)
     return out
@@ -130,7 +191,16 @@ def main(argv=None):
     model, pinfo = pretrain_backbone(prep, bb, L, H, pre, device, a.seed, a.out.parent / "_checkpoints", data.name,
                                      "fsnet", verbose=False)
     pinfo = {**pinfo, "steps_per_day": data.meta.get("steps_per_day", 24)}
-    names = a.methods or [m for m in METHODS if not (data.values.shape[1] > 300 and m in WIDE_SKIP)]
+    skip = WIDE_SKIP if data.values.shape[1] > 300 else set()
+    names = list(a.methods or [m for m in METHODS if m not in skip])
+    for m in list(names):        # a referenced method is tuned first, and dropped together with its dependants
+        rs = refs(METHODS[m][0]) + refs(METHODS[m][1])
+        if any(r in skip for r in rs):
+            names.remove(m)
+            continue
+        for r in rs:
+            if r not in names:
+                names.insert(names.index(m), r)
     print(f"[{data.name} {a.backbone} H={H} seed={a.seed}] backbone {time.perf_counter() - t0:.0f}s; methods {names}",
           flush=True)
 
@@ -142,16 +212,20 @@ def main(argv=None):
     burn = (vlast - vfirst + 1) // 2                     # score only the 2nd half of the validation stream (M1)
     for name in names:
         default, space = METHODS[name]
-        h = hashlib.sha256(json.dumps([default, space, a.budget, a.tune_dfac, CODE_VERSION], sort_keys=True)
-                           .encode()).hexdigest()[:16]
+        rs = sorted(set(refs(default)) | set(refs(space)))
+        stale = [r for r in rs if r not in tuning or tuning[r].get("space_hash") != space_hash(r, a)]
+        if stale:
+            raise RuntimeError(f"{name} references methods without current tuning {stale}")
+        h = space_hash(name, a)
         if name in tuning and tuning[name].get("space_hash") == h:
             continue
         cands = sample_configs(default, space, a.budget, seed=12345)
         per_d = {f: [] for f in a.tune_dfac}
         for cfg in cands:
             for f in a.tune_dfac:
+                spec_f = resolve(cfg, tuning, f)                 # outside the try: reference errors must surface
                 try:
-                    r = run_one(y, x, vfirst, vlast, L, H, f * H, cfg, model, device, pinfo, varch, a.seed)
+                    r = run_one(y, x, vfirst, vlast, L, H, f * H, spec_f, model, device, pinfo, varch, a.seed)
                     per_d[f].append(float(r.se[burn:].mean()))
                 except Exception as e:                       # a config that crashes is scored as invalid
                     per_d[f].append(float("inf"))
@@ -189,7 +263,7 @@ def main(argv=None):
             if (name, d) in done:
                 continue
             fd = max([g for g in a.tune_dfac if g <= f] or [min(a.tune_dfac)])
-            spec = tuning[name]["best_by_dfac"][str(fd)]
+            spec = resolve(tuning[name]["best_by_dfac"][str(fd)], tuning, fd)
             r = run_one(y, x, first, last, L, H, d, spec, model, device, pinfo, tarch, a.seed)
             keep = r.origins >= tfirst
             se, ae, origins = r.se[keep], r.ae[keep], r.origins[keep]

@@ -80,13 +80,16 @@ class VINEFeatures:
     """Per-channel feature map phi_t (p features), G_t-measurable.
 
     [1 | DCT_{K_f}(yhat_t - x_t) | DCT_{K_r}(revision_t) | iota_t | EWMA_a(iota) for a in rates |
-     x_t - mean_S(x) | x_{t+1-S} - mean_S(x)]   with iota_t = x_t - yhat_{t-1,1} (input innovation).
+     x_t - mean_S(x) | x_{t+1-S} - mean_S(x) | cos/sin(2 pi k t / S), k = 1..k_phase]
+    with iota_t = x_t - yhat_{t-1,1} (input innovation). The calendar-phase features are known at t; their one-step
+    evolution is an exact rotation, which VINE's linear transition can represent (exactly propagated at kappa = 1).
     """
 
     def __init__(self, H: int, C: int, k_f: int = 3, k_r: int = 3, rates=(0.5, 0.95), season: int = 24,
                  use_level: bool = True, use_revision: bool = True, use_ewma: bool = True, k_lb: int = 0,
-                 n_lb: int = 2, L: int = 96, use_last: bool = False):
+                 n_lb: int = 2, L: int = 96, use_last: bool = False, k_phase: int = 0):
         self.H, self.C = H, C
+        self.k_phase = int(k_phase)
         # lookback-block shapes (DRiC-style information): DCT of the last n_lb blocks of the input window, each
         # minus x_t; block length min(H, L // n_lb)
         self.n_lb = n_lb if k_lb > 0 else 0
@@ -98,15 +101,16 @@ class VINEFeatures:
         self.rates = np.asarray(rates if use_ewma else (), float)
         self.season, self.use_level = int(season), use_level
         self.p = (1 + self.Bf.shape[0] + self.Br.shape[0] + 1 + len(self.rates) + (2 if use_level else 0)
-                  + self.n_lb * self.Blb.shape[0] + int(use_last))
+                  + self.n_lb * self.Blb.shape[0] + int(use_last) + 2 * self.k_phase)
         self.ewma = np.zeros((len(self.rates), C))
         self.names = (["bias"] + [f"shape{k}" for k in range(self.Bf.shape[0])]
                       + [f"rev{k}" for k in range(self.Br.shape[0])] + ["innov"]
                       + [f"ewma{a}" for a in self.rates] + (["level", "snaive"] if use_level else [])
                       + [f"lb{b}_{k}" for b in range(self.n_lb) for k in range(self.Blb.shape[0])]
-                      + (["last"] if use_last else []))
+                      + (["last"] if use_last else [])
+                      + [f"{f}{k}" for k in range(1, self.k_phase + 1) for f in ("cos", "sin")])
 
-    def __call__(self, x: np.ndarray, yhat: np.ndarray, yhat_prev: np.ndarray | None) -> np.ndarray:
+    def __call__(self, x: np.ndarray, yhat: np.ndarray, yhat_prev: np.ndarray | None, t: int | None = None) -> np.ndarray:
         """x (L, C) input window ending at t, yhat (H, C) forecast at t, yhat_prev (H, C) forecast at t-1 or None."""
         C = self.C
         phi = np.empty((C, self.p))
@@ -148,6 +152,12 @@ class VINEFeatures:
         if self.use_last:
             phi[:, j] = xt
             j += 1
+        if self.k_phase:
+            if t is None:
+                raise ValueError("calendar-phase features need the origin index t")
+            ang = 2.0 * np.pi * (t % self.season) / self.season * np.arange(1, self.k_phase + 1)
+            phi[:, j:j + 2 * self.k_phase] = np.stack([np.cos(ang), np.sin(ang)], 1).reshape(-1)[None, :]
+            j += 2 * self.k_phase
         return phi
 
 
@@ -210,8 +220,10 @@ class _CorrectorBase(OnlineMethod):
     def __init__(self, ridge: float = 1.0, k_f: int = 3, k_r: int = 3, pool: bool = False, clip: float = 3.0,
                  guard: float = 6.0, rates=(0.5, 0.95), use_level: bool = True, use_revision_feat: bool = True,
                  use_ewma: bool = True, season: int | None = None, warmup: int = 50, solve_every: int = 1,
-                 k_lb: int = 0, n_lb: int = 2, use_last: bool = False, gate: int = 0, k_h: int = 0, **kw):
+                 k_lb: int = 0, n_lb: int = 2, use_last: bool = False, gate: int = 0, k_h: int = 0,
+                 k_phase: int = 0, **kw):
         super().__init__(**kw)
+        self.k_phase = int(k_phase)   # calendar-phase Fourier features (period = steps per day)
         self.k_h = int(k_h)        # >0: project the correction onto the first k_h horizon-DCT components
         self.k_lb, self.n_lb, self.use_last, self.gate = k_lb, n_lb, use_last, int(gate)
         self.ridge, self.k_f, self.k_r, self.pool, self.clip, self.guard = ridge, k_f, k_r, pool, clip, guard
@@ -223,7 +235,7 @@ class _CorrectorBase(OnlineMethod):
         season = self.season or int((ctx.pretrain_info or {}).get("steps_per_day")
                                     or (ctx.extra or {}).get("steps_per_day", 24))
         self.feat = VINEFeatures(ctx.H, ctx.C, self.k_f, self.k_r, self.rates, season, self.use_level, self.use_rev,
-                                 self.use_ewma, self.k_lb, self.n_lb, ctx.L, self.use_last)
+                                 self.use_ewma, self.k_lb, self.n_lb, ctx.L, self.use_last, self.k_phase)
         # optional shrinkage gate towards the frozen forecast (DRiC-style): alpha = clip(sum<c,e>/sum|c|^2, 0, 1)
         # over the last `gate` matured origins (labels used only once released: block at s + d)
         self.Ph = None
@@ -415,7 +427,7 @@ class VINE(_CorrectorBase):
         yhat = base_pred.astype(np.float64)
         if self.needs_lag:
             self._consume_lag_anchors(t)
-        phi = self.feat(x, yhat, self.prev_yhat)                                          # (C, p)
+        phi = self.feat(x, yhat, self.prev_yhat, t)                                          # (C, p)
         if self.center:
             # centre the non-intercept features with a running (gamma) mean, so all mean structure sits in the
             # intercept, which the propagation discount kappa leaves undamped (no bias decay over horizons)
@@ -548,7 +560,7 @@ class MCLSPerRow(_CorrectorBase):
         for v in range(max(start, self.ctx.first_origin + 1), lim + 1):
             self._ingest(v)
         self.last_lim = max(lim, self.last_lim or lim)
-        phi = self.feat(x, yhat, self.prev_yhat)
+        phi = self.feat(x, yhat, self.prev_yhat, t)
         if self.prev_yhat is not None:
             self._update_scale(x[-1].astype(np.float64) - self.prev_yhat[0])
         self.n_steps += 1
@@ -575,11 +587,19 @@ class SafeMix(OnlineMethod):
     name = "safe_mix"
 
     def __init__(self, experts: list | None = None, eta: float = 0.5, share: float = 1e-3,
-                 blocks=(6, 24, 48, 96), **kw):
+                 blocks=(6, 24, 48, 96), hint: str | None = None, **kw):
         super().__init__(**kw)
         self.expert_specs = experts or [{"type": "frozen"}, {"type": "mc_ls_pr"},
                                         {"type": "vine", "gamma": 0.99}, {"type": "vine", "gamma": 0.999}]
         self.eta, self.share, self.block_ends = eta, share, tuple(blocks)
+        # hint = "nowcast": optimistic delayed hedging (revision-hinted). Pending (unmatured) forecasts are scored
+        # now on every target: released values y_tau (tau <= label_limit, point lag l = d - H) where available,
+        # otherwise the freshest issued forecast of y_tau (the nowcast). The fixed-share weights from matured
+        # losses are tilted by -eta * (sum of these provisional losses); the tilt is replaced by the exact loss
+        # once the block matures (no double counting). hint = None: plain delayed SAFE-MIX (bit-identical).
+        if hint not in (None, "nowcast"):
+            raise ValueError("hint must be None or 'nowcast'")
+        self.hint = hint
 
     def setup(self, ctx):
         super().setup(ctx)
@@ -594,10 +614,45 @@ class SafeMix(OnlineMethod):
         self.logw = np.zeros((len(self.blocks), len(self.experts)))
         self.pending: dict[int, np.ndarray] = {}
         self.weight_trace = []
+        if self.hint:
+            self.nowcast: dict[int, np.ndarray] = {}      # target time -> freshest issued mixture forecast (C,)
 
-    def _weights(self):
-        w = np.exp(self.logw - self.logw.max(1, keepdims=True))
+    def _weights(self, logw=None):
+        logw = self.logw if logw is None else logw
+        w = np.exp(logw - logw.max(1, keepdims=True))
         return w / w.sum(1, keepdims=True)
+
+    def _tilt(self, t):
+        """-eta * provisional losses of all pending origins (released values, else nowcasts), per block/expert."""
+        if not self.pending:
+            return 0.0
+        H = self.ctx.H
+        lim = self.ctx.history.label_limit()
+        origins = np.array(sorted(self.pending))
+        P = np.stack([self.pending[s] for s in origins]).astype(np.float64)          # (S, N, H, C)
+        tau = origins[:, None] + np.arange(1, H + 1)[None, :]                         # (S, H) target times
+        lo, hi = int(tau.min()), int(tau.max())
+        Yt = np.full((hi - lo + 1, P.shape[-1]), np.nan)                              # target-time indexed
+        if lim >= lo:
+            Yt[: lim - lo + 1] = self.ctx.history.labels(lo, lim + 1).astype(np.float64)
+        for v in range(max(lim + 1, lo), hi + 1):
+            nc = self.nowcast.get(v)
+            if nc is not None:
+                Yt[v - lo] = nc
+        Y = Yt[tau - lo]                                                               # (S, H, C)
+        err = (P - Y[:, None]) ** 2                                                    # (S, N, H, C)
+        ok = np.broadcast_to(np.isfinite(Y)[:, None], err.shape)                      # target available
+        err = np.where(ok, np.where(np.isfinite(err), err, np.inf), 0.0)              # NaN expert: no reward
+        cnt = ok.sum(-1)                                                               # (S, N, H)
+        tilt = np.zeros_like(self.logw)
+        for b, (a, z) in enumerate(self.blocks):
+            n = cnt[:, :, a:z].sum((0, 2))                                             # (N,)
+            tot = err[:, :, a:z].sum((0, 2, 3))
+            # sum over pending origins of per-origin mean losses (same scale as the matured update)
+            tilt[b] = -self.eta * tot / max(1.0, (z - a) * P.shape[-1])
+            if not n.any():
+                tilt[b] = 0.0
+        return tilt
 
     def update(self, info):
         for e in self.experts:
@@ -617,17 +672,29 @@ class SafeMix(OnlineMethod):
 
     def predict(self, x, base_pred, t):
         preds = np.stack([np.asarray(e.predict(x, base_pred, t), np.float64) for e in self.experts])  # (N, H, C)
+        if self.hint:                     # fixed share applied AFTER the optimistic tilt keeps the share floor
+            W = self._weights(self.logw + np.nan_to_num(self._tilt(t), neginf=-1e300))
+            W = (1 - self.share) * W + self.share / W.shape[1]
+        else:
+            W = self._weights()
         self.pending[t] = preds.astype(np.float32)
-        W = self._weights()
         out = np.empty(preds.shape[1:])
         for b, (a, z) in enumerate(self.blocks):
             out[a:z] = np.einsum("n,nhc->hc", W[b], preds[:, a:z])
         if t % 50 == 0:
             self.weight_trace.append(W.copy())
+        if self.hint:
+            H = self.ctx.H
+            for h in range(H):
+                self.nowcast[t + 1 + h] = out[h].copy()
+            for k in [k for k in self.nowcast if k <= self.ctx.history.label_limit()]:
+                del self.nowcast[k]
         return out.astype(np.float32)
 
     def state_breakdown(self):
         out = {"logw": self.logw, "pending_expert_preds": list(self.pending.values())}
+        if self.hint:
+            out["pending_nowcast"] = list(self.nowcast.values())
         for i, e in enumerate(self.experts):
             for k, v in e.state_breakdown().items():
                 out[f"{k}_e{i}" if k.startswith(("pending", "raw")) else f"e{i}_{k}"] = v
@@ -657,37 +724,47 @@ class VINELambda(VINE):
         H, p, B = ctx.H, self.p, self.B
         self.Ch = np.zeros((B, H, p, p))
         self.Rh = np.zeros((B, H, p))
-        self.pr_phi: dict[int, np.ndarray] = {}
-        self.pr_yhat: dict[int, np.ndarray] = {}
+        # ring buffers of issue-time features/forecasts, indexed by origin mod K (K > d + H covers every origin
+        # whose rows can still mature); pr_org holds the origin stored in each slot (-1 = empty)
+        self.K = int(ctx.delay) + 1        # suffices: origin o's last row matures at o + d (strict; prefix/leaky earlier)
+        self.EMPTY = np.iinfo(np.int64).min
+        self.pr_phi = np.zeros((self.K, ctx.C, p))
+        self.pr_yhat = np.zeros((self.K, H, ctx.C))
+        self.pr_org = np.full(self.K, self.EMPTY, np.int64)
+        self.hidx = np.arange(H)
         self.last_lim = None
         self.g_pr = self.gamma_pr if self.gamma_pr is not None else self.gamma
 
     def _ingest(self, lim):
-        H, C = self.ctx.H, self.ctx.C
+        H = self.ctx.H
         y = self.ctx.history.labels(lim, lim + 1)[0].astype(np.float64)
-        phis, errs = np.zeros((H, C, self.p)), np.zeros((H, C))
-        for h in range(1, H + 1):
-            s = lim - h
-            if s in self.pr_phi:
-                phis[h - 1], errs[h - 1] = self.pr_phi[s], y - self.pr_yhat[s][h - 1]
-        ok = np.isfinite(y)[None, :] & np.isfinite(errs) & np.isfinite(phis).all(-1)
+        org = lim - 1 - self.hidx                                     # origin whose row h (0-based) targets lim
+        slot = org % self.K
+        have = self.pr_org[slot] == org                               # (H,)
+        phis = self.pr_phi[slot]                                      # (H, C, p)
+        errs = y[None, :] - self.pr_yhat[slot, self.hidx]             # (H, C)
+        ok = have[:, None] & np.isfinite(y)[None, :] & np.isfinite(errs) & np.isfinite(phis).all(-1)
         phis, errs = np.where(ok[..., None], phis, 0.0), np.where(ok, errs, 0.0)
+        pc = phis.transpose(1, 0, 2)                                  # (C, H, p)
         self.Ch *= self.g_pr
         self.Rh *= self.g_pr
-        self.Ch += self._agg(np.einsum("hci,hcj->chij", phis, phis))
-        self.Rh += self._agg(np.einsum("hc,hci->chi", errs, phis))
-        for s in [s for s in self.pr_phi if s <= lim - H]:
-            del self.pr_phi[s], self.pr_yhat[s]
+        self.Ch += self._agg(pc[..., :, None] * pc[..., None, :])
+        self.Rh += self._agg(errs.T[..., None] * pc)
 
     def _solve(self):
         H, p, mix = self.ctx.H, self.p, self.mix
         I = self.ridge * np.eye(p)[None]
         W = np.zeros((self.B, H, p))
         W[:, 0] = np.linalg.solve(self.Ca + I, self.ra[..., None])[..., 0]
-        for h in range(1, H):
-            A = mix * self.Cr + (1.0 - mix) * self.Ch[:, h] + I
-            rhs = mix * (self.Q[:, h - 1] + np.einsum("bi,bij->bj", W[:, h - 1], self.D)) + (1.0 - mix) * self.Rh[:, h]
-            W[:, h] = np.linalg.solve(A, rhs[..., None])[..., 0]
+        if H > 1:
+            # the system matrices do not depend on the recursion: invert all H-1 at once (one batched LAPACK call),
+            # then run the cheap row recursion w_h = (mix (Q_h + w_{h-1} D) + (1-mix) R_h) A_h^{-1}
+            Ainv = np.linalg.inv(mix * self.Cr[:, None] + (1.0 - mix) * self.Ch[:, 1:] + I[:, None])   # (B,H-1,p,p)
+            base = mix * self.Q + (1.0 - mix) * self.Rh[:, 1:]                                       # (B,H-1,p)
+            mD = mix * self.D
+            for h in range(1, H):
+                rhs = base[:, h - 1] + np.einsum("bi,bij->bj", W[:, h - 1], mD)
+                W[:, h] = np.einsum("bj,bjk->bk", rhs, Ainv[:, h - 1])    # A symmetric: rhs A^-1 = (A^-1 rhs)^T
         self._set_W(W)
 
     def predict(self, x, base_pred, t):
@@ -697,11 +774,17 @@ class VINELambda(VINE):
             self._ingest(v)
         self.last_lim = max(lim, self.last_lim or lim)
         out = super().predict(x, base_pred, t)
-        self.pr_phi[t], self.pr_yhat[t] = self.prev_phi, self.prev_yhat
+        k = t % self.K
+        old = self.pr_org[k]
+        if old != self.EMPTY and old > (self.last_lim if self.last_lim is not None else -np.inf) - self.ctx.H:
+            raise RuntimeError(f"ring buffer would overwrite origin {old} before all its rows matured")
+        self.pr_phi[k], self.pr_yhat[k], self.pr_org[k] = self.prev_phi, self.prev_yhat, t
         return out
 
     def state_breakdown(self):
         out = super().state_breakdown()
-        out.update({"C_rows": self.Ch, "R_rows": self.Rh, "pending_pr_phi": list(self.pr_phi.values()),
-                    "pending_pr_yhat": list(self.pr_yhat.values())})
+        lim = self.last_lim if self.last_lim is not None else -1
+        live = (self.pr_org != self.EMPTY) & (self.pr_org > lim - self.ctx.H)   # origins with rows still to mature
+        out.update({"C_rows": self.Ch, "R_rows": self.Rh, "pending_pr_phi": self.pr_phi[live],
+                    "pending_pr_yhat": self.pr_yhat[live]})
         return out

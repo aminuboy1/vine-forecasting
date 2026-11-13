@@ -46,6 +46,11 @@ METHOD_SPECS = [
     {"type": "mc_ls_pr"},
     {"type": "safe_mix"},
     {"type": "vine_lam", "lam": 0.5},
+    {"type": "vine", "k_phase": 2, "season": 8, "name": "vine_phase"},
+    {"type": "stack", "base": {"type": "dric", "variant": "l8", "phases": "all"},
+     "top": {"type": "vine_lam", "lam": 0.5, "warmup": 5}, "name": "stack_vine_on_dric"},
+    {"type": "safe_mix", "hint": "nowcast", "name": "safe_mix_hint",
+     "experts": [{"type": "frozen"}, {"type": "mc_ls_pr"}, {"type": "vine_lam", "lam": 0.5}]},
 ]
 
 

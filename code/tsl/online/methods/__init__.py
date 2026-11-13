@@ -7,6 +7,7 @@ from .elf import ELFStyle
 from .epoc import EPOC
 from .rls import RLSBank
 from .simple import DelayedOGD, Frozen, PeriodicRetrain, Persistence
+from .stack import Stack
 from .vine import MCLS, VINE, MCLSPerRow, SafeMix, VINELambda
 
 METHODS = {
@@ -29,6 +30,7 @@ METHODS = {
     "mc_ls": MCLS,              # matured-only least squares on VINE's features (lam = 0)
     "mc_ls_pr": MCLSPerRow,     # label-only LS with per-row maturity at the point lag l = d - H (EFC-style)
     "safe_mix": SafeMix,        # delayed EWA + fixed share over {frozen, MC-LS, VINE fast, VINE slow}
+    "stack": Stack,             # top corrector learning on a base corrector's forecasts (e.g. VINE on DRiC)
 }
 
 
