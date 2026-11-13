@@ -1,0 +1,23 @@
+# PILOT (default hyperparameters, no tuning): week-4 gate direction check on ETTh2. Pre-registered in PREREGISTRATION.md.
+_base_: ../_base.yaml
+name: vine_pilot_etth2
+dataset: {name: ETTh2}
+horizons: [24]
+protocol: {delay_factors: [1, 2, 4]}
+backbone: {name: DLinear}
+pretrain: {epochs: 10, lr: 0.001, batch_size: 32, patience: 3}
+methods:
+  - {type: frozen}
+  - {type: persistence, kind: last, name: persist_last}
+  - {type: persistence, kind: seasonal, name: persist_seasonal}
+  - {type: rls_audit}
+  - {type: elf}
+  - {type: dric, variant: l8, phases: all, name: dric_l8_all}
+  - {type: epoc, phases: all, name: epoc_all}
+  - {type: mc_ls}
+  - {type: mc_ls_pr}
+  - {type: mc_ls_pr, k_f: 0, use_level: false, use_ewma: false, name: rev_regress}
+  - {type: vine}
+  - {type: vine, target: teacher, name: vine_teacher}
+  - {type: safe_mix}
+seeds: [0]

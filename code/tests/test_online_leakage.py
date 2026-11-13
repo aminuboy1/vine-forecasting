@@ -38,6 +38,14 @@ METHOD_SPECS = [
     {"type": "ogd", "scope": "head", "lr": 1e-3},
     {"type": "periodic", "period": 50, "epochs": 1, "max_steps": 5},
     {"type": "periodic", "period": 50, "epochs": 1, "max_steps": 5, "window": 150, "name": "periodic_win"},
+    {"type": "vine", "warmup": 5},
+    {"type": "vine", "anchor": "block", "name": "vine_block"},
+    {"type": "vine", "lam": 0.5, "name": "vine_lam05"},
+    {"type": "vine_g", "name": "vine_g"},
+    {"type": "mc_ls"},
+    {"type": "mc_ls_pr"},
+    {"type": "safe_mix"},
+    {"type": "vine_lam", "lam": 0.5},
 ]
 
 
@@ -281,6 +289,3 @@ def test_inputs_are_features_not_targets():
     OnlineEvaluator(y, FIRST, FIRST + 60, L, H, delay=d, x=x).run(Reader(), _backbone())
 
 
-def test_vine_stub_refuses_to_run():
-    with pytest.raises(NotImplementedError):
-        OnlineEvaluator(_z(), FIRST, FIRST + 10, L, H).run(build_method({"type": "vine"}), _backbone())

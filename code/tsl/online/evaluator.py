@@ -117,8 +117,10 @@ class OnlineEvaluator:
             tracemalloc.start()
         t_start = time.perf_counter()
 
+        step_t = np.zeros(N)
         for i, s in enumerate(origins):
             s = int(s)
+            t_step0 = time.perf_counter()
             archive.now = s
             # ---------------- 1) release labels at time s, then update
             hist.now, hist.phase = s, "update"
@@ -143,6 +145,7 @@ class OnlineEvaluator:
                 yhat = np.asarray(method.predict(xw, bp, s), dtype=np.float32)
             if yhat.shape != (H, C):
                 raise ValueError(f"{method.name}.predict returned {yhat.shape}, expected {(H, C)}")
+            step_t[i] = time.perf_counter() - t_step0     # update + predict of this step (method cost)
             yt = self._yb(s)
             err = yhat - yt
             se[i] = (err ** 2).mean(1)
@@ -178,7 +181,10 @@ class OnlineEvaluator:
                     "leaky": self.mode == "leaky", "leak_checks": checker.n_checks,
                     "max_leak_steps": checker.max_violation, "history_max_label_accessed": hist.max_label_accessed,
                     "two_channel": self.x is not self.y}
-        return OnlineResult(method=method.name, origins=origins, se=se, ae=ae, timing=timer.summary(),
+        tsum = timer.summary()
+        tsum["step"] = {"n": int(N), "total_s": float(step_t.sum()), "mean_us": float(step_t.mean() * 1e6),
+                        "median_us": float(np.median(step_t) * 1e6), "p95_us": float(np.percentile(step_t, 95) * 1e6)}
+        return OnlineResult(method=method.name, origins=origins, se=se, ae=ae, timing=tsum,
                             state_bytes={"final": int(sb[-1]) if sb else 0, "max": int(max(sb)) if sb else 0,
                                          "trace": state_trace, "categories": method.state_categories(),
                                          "breakdown": _breakdown_bytes(method)},

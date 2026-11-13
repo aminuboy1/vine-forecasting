@@ -22,6 +22,32 @@ class Frozen(OnlineMethod):
         return base_pred
 
 
+class Persistence(OnlineMethod):
+    """Backbone-free naive forecasts from the input window: `last` repeats x_t; `seasonal` repeats the last season
+    (x_{t+h-S} for the season S = steps per day, read through the guarded input history when S > L)."""
+    name = "persistence"
+    needs_base_pred = False
+
+    def __init__(self, kind: str = "last", season: int | None = None, **kw):
+        super().__init__(**kw)
+        if kind not in ("last", "seasonal"):
+            raise ValueError("kind must be last|seasonal")
+        self.kind, self.season = kind, season
+
+    def setup(self, ctx):
+        super().setup(ctx)
+        self.S = int(self.season or (ctx.pretrain_info or {}).get("steps_per_day") or 24)
+
+    def predict(self, x, base_pred, t):
+        H = self.ctx.H
+        if self.kind == "last":
+            return np.repeat(x[-1:], H, 0)
+        S = self.S
+        hist = x if S <= x.shape[0] else self.ctx.history.inputs(t - S + 1, t + 1)
+        idx = (np.arange(1, H + 1) - 1) % S          # x_{t+h-S} = hist[-S + (h-1) % S]
+        return hist[-S:][idx]
+
+
 class _TorchModelMethod(OnlineMethod):
     needs_base_pred = False
 
