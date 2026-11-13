@@ -79,6 +79,33 @@ def test_forecasts_before_t0_do_not_depend_on_future(spec, mode, delay):
     np.testing.assert_array_equal(pa, pb)
 
 
+@pytest.mark.parametrize("spec", [
+    {"type": "stack", "base": {"type": "dric", "variant": "l8", "phases": "all"},
+     "top": {"type": "vine_lam", "lam": 0.5, "gamma": 0.9998, "gamma_a": 0.9998, "warmup": 5}},
+    {"type": "stack", "base": {"type": "dric", "variant": "l8", "phases": "all"},
+     "top": {"type": "mc_ls_pr", "gamma_m": 0.9998, "warmup": 5}},
+], ids=["vine_s", "vine_s_lo"])
+@pytest.mark.parametrize("delay", [H, 3 * H])
+def test_stack_causal_with_inputs_different_from_targets(spec, delay):
+    """Inputs x differ from targets y (noisy copy): poisoning BOTH after t0 must not change earlier forecasts."""
+    y = _z()
+    x = (y + 0.3 * np.random.default_rng(5).standard_normal(y.shape)).astype(y.dtype)
+    t0 = FIRST + 120
+    last = t0 - 1 + 5
+
+    def run(yy, xx):
+        ev = OnlineEvaluator(yy, FIRST, last, L, H, delay=delay, x=xx, keep_preds=True)
+        return ev.run(build_method(spec), _backbone(), device="cpu", seed=0).preds
+
+    xp, yp = x.copy(), y.copy()
+    xp[t0:] = np.nan
+    yp[t0:] = np.nan
+    a, b = run(y, x), run(yp, xp)
+    n_cmp = t0 - FIRST
+    assert np.isfinite(b[:n_cmp]).all(), "a forecast before t0 used a future (NaN) value"
+    np.testing.assert_array_equal(a[:n_cmp], b[:n_cmp])
+
+
 def test_leaky_mode_is_detected_by_the_causality_test():
     z = _z()
     t0 = FIRST + 120

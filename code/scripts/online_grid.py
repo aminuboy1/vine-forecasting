@@ -84,6 +84,9 @@ METHODS = {
     "vine_s_pure": ({"type": "stack", "base": "@dric_l8", "top": {"type": "vine", "gamma": 0.9998, "gamma_a": 0.9998}},
                     {"top.ridge": [1.0, 10.0, 100.0], "top.gate": [0, 32], "top.k_lb": [0, 4],
                      "top.kappa": [0.8, 0.9, 0.95, 1.0]}),
+    # pre-registered memory SENSITIVITY (reported, never selected): the tuned vine_s config with gamma changed
+    "vine_s_g9995": ({"_from": "@vine_s", "_set": {"top.gamma": 0.9995, "top.gamma_a": 0.9995}}, {}),
+    "vine_s_g9999": ({"_from": "@vine_s", "_set": {"top.gamma": 0.9999, "top.gamma_a": 0.9999}}, {}),
     # ablation: the same top layer without the base (does stacking matter?)
     "vine_lam_lm": ({"type": "vine_lam", "gamma": 0.9998, "gamma_a": 0.9998},
                     {"lam": [0.25, 0.5, 0.75, 0.9], "ridge": [1.0, 10.0, 100.0], "gate": [0, 32], "k_lb": [0, 4]}),
@@ -125,6 +128,15 @@ def refs(obj) -> list[str]:
 
 
 def resolve(obj, tuning: dict, fd: int):
+    if isinstance(obj, dict) and "_from" in obj:      # derived config: a tuned config with fixed overrides
+        out = resolve(obj["_from"], tuning, fd)
+        for k, v in obj.get("_set", {}).items():
+            node = out
+            *path, leaf = k.split(".")
+            for q in path:
+                node = node[q]
+            node[leaf] = v
+        return out
     if isinstance(obj, str) and obj.startswith("@"):
         return resolve(copy.deepcopy(tuning[obj[1:]]["best_by_dfac"][str(fd)]), tuning, fd)
     if isinstance(obj, dict):
