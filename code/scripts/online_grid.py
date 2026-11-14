@@ -90,6 +90,11 @@ METHODS = {
     # ablation: the same top layer without the base (does stacking matter?)
     "vine_lam_lm": ({"type": "vine_lam", "gamma": 0.9998, "gamma_a": 0.9998},
                     {"lam": [0.25, 0.5, 0.75, 0.9], "ridge": [1.0, 10.0, 100.0], "gate": [0, 32], "k_lb": [0, 4]}),
+    # ---- amendment 2026-11-15 (before any DSOF/Proceed result): leak-free external baselines, ported from the
+    # official code (tsl/online/methods/{dsof,proceed}.py). Default = published configuration; tuned like all others.
+    "dsof": ({"type": "dsof"}, {"lr_scale": [0.1, 0.3, 1.0, 3.0, 10.0], "discounted": [0.8, 0.9, 0.95]}),
+    "proceed": ({"type": "proceed"}, {"online_lr": [1e-6, 3e-6, 1e-5, 3e-5, 1e-4, 3e-4], "lr": [3e-4, 1e-3, 3e-3],
+                                      "concept_dim": [50, 200], "bottleneck": [32, 48]}),
 }
 CODE_VERSION = "2026-11-13c"      # bump when a method's code changes, to invalidate cached tuning
 WIDE_SKIP = {"dric_l8", "ogd_head", "periodic"}           # H copies of per-channel learners: too heavy for C > 300 (DRiC-G is kept)
@@ -202,7 +207,7 @@ def main(argv=None):
     torch.set_num_threads(a.threads)
     model, pinfo = pretrain_backbone(prep, bb, L, H, pre, device, a.seed, a.out.parent / "_checkpoints", data.name,
                                      "fsnet", verbose=False)
-    pinfo = {**pinfo, "steps_per_day": data.meta.get("steps_per_day", 24)}
+    pinfo = {**pinfo, "steps_per_day": data.meta.get("steps_per_day", 24), "dataset": data.name}
     skip = WIDE_SKIP if data.values.shape[1] > 300 else set()
     names = list(a.methods or [m for m in METHODS if m not in skip])
     for m in list(names):        # a referenced method is tuned first, and dropped together with its dependants

@@ -3,8 +3,10 @@ from __future__ import annotations
 
 from .audit_rls import AuditRLSBank
 from .dric import DRiC
+from .dsof import DSOF
 from .elf import ELFStyle
 from .epoc import EPOC
+from .proceed import Proceed
 from .rls import RLSBank
 from .simple import DelayedOGD, Frozen, PeriodicRetrain, Persistence
 from .stack import Stack
@@ -31,6 +33,8 @@ METHODS = {
     "mc_ls_pr": MCLSPerRow,     # label-only LS with per-row maturity at the point lag l = d - H (EFC-style)
     "safe_mix": SafeMix,        # delayed EWA + fixed share over {frozen, MC-LS, VINE fast, VINE slow}
     "stack": Stack,             # top corrector learning on a base corrector's forecasts (e.g. VINE on DRiC)
+    "dsof": DSOF,               # port of the official DSOF code (ICLR 2025) to the truthful delay protocol
+    "proceed": Proceed,         # port of the official Proceed code (KDD 2025) to the truthful delay protocol
 }
 
 
