@@ -227,6 +227,92 @@ def fig_delay(means: pd.DataFrame, path: Path):
     fig.savefig(path, bbox_inches="tight", pad_inches=0.01)
 
 
+def rpi_analysis(rep: Path, con: pd.DataFrame, tdir: Path) -> dict | None:
+    """H3/H6 and Fig. 4 from rep/rpi.csv (code/scripts/vine_rpi.py collect). Cells = (dataset, H, delay),
+    seed-averaged (3 seeds required). Gains are test relative MSE reductions (%) of vine_s, primary family."""
+    f = rep / "rpi.csv"
+    if not f.exists():
+        return None
+    from scipy.stats import spearmanr
+    r = pd.read_csv(f)
+    cols = ["rpi_B", "rpi_F", "rpi_G", "orpi_F", "orpi_G", "nu_F"]
+    g = r.groupby(["dataset", "H", "delay"])
+    cell = g[cols].mean().join(g.size().rename("n_seeds")).reset_index()
+    cell = cell[cell.n_seeds == 3].copy()
+    pr = con[(con.family == "primary") & (con.a == "vine_s")]
+    key = pd.MultiIndex.from_frame(cell[["dataset", "H", "delay"]])
+    for kind, col in (("vs_control", "gain_ctrl"), ("vs_dric_l8", "gain_dric")):
+        x = pr[pr.kind == kind].set_index(["dataset", "H", "delay"]).rel
+        cell[col] = -100 * x.reindex(key).values
+    cell = cell.dropna(subset=["gain_ctrl", "gain_dric"])
+    out = {"n_cells": int(len(cell)), "datasets": sorted(cell.dataset.unique().tolist())}
+    for rk in ("rpi_F", "orpi_F", "rpi_B"):
+        for gk in ("gain_ctrl", "gain_dric"):
+            rho, p = spearmanr(cell[rk], cell[gk])
+            out[f"spearman_{rk}_{gk}"] = {"rho": float(rho), "p": float(p)}
+    for nm, gk in (("H3_preregistered", "gain_ctrl"), ("H3_theory", "gain_dric")):
+        rho = out[f"spearman_rpi_F_{gk}"]["rho"]
+        out[nm] = {"rho": rho, "criterion": 0.5, "pass": bool(rho >= 0.5)}
+    pos = cell[cell.rpi_F > 0]
+    out["H6"] = {"cells_with_positive_pre_rpi": int(len(pos)),
+                 "share_post_le_25pct": float((pos.rpi_G <= 0.25 * pos.rpi_F).mean()) if len(pos) else None,
+                 "median_pre": float(cell.rpi_F.median()), "median_post": float(cell.rpi_G.median()),
+                 "median_online_pre": float(cell.orpi_F.median()), "median_online_post": float(cell.orpi_G.median())}
+    out["median"] = {k: float(cell[k].median()) for k in cols}
+    out["range"] = {k: [float(cell[k].min()), float(cell[k].max())] for k in cols}
+    (rep / "rpi_hypotheses.json").write_text(json.dumps(out, indent=1))
+    cell.to_csv(rep / "rpi_cells.csv", index=False)
+
+    # table: one row per (dataset, H), means over the delays
+    dh = cell.groupby(["dataset", "H"])[cols + ["gain_ctrl", "gain_dric"]].mean().reset_index()
+    dh["o"] = dh.dataset.map({d: i for i, d in enumerate(DS_ORDER)})
+    dh = dh.sort_values(["o", "H"])
+    lines = [r"\begin{tabular}{lrrrrrrrrr}", r"\toprule",
+             r" & & \multicolumn{3}{c}{RPI (\%)} & \multicolumn{2}{c}{Online RPI (\%)} & & "
+             r"\multicolumn{2}{c}{Test gain (\%)} \\",
+             r"\cmidrule(lr){3-5}\cmidrule(lr){6-7}\cmidrule(lr){9-10}",
+             r"Stream & $H$ & $B$ & $F$ & $G$ & $F$ & $G$ & NU$_F$ (\%) & vs ctrl. & vs DRiC \\", r"\midrule"]
+    for _, x in dh.iterrows():
+        nm = x.dataset + (r"$^\ast$" if x.dataset in DEV else "")
+        lines.append(f"{nm} & {int(x.H)} & " + " & ".join(f"{100 * x[k]:.1f}" for k in cols)
+                     + f" & {x.gain_ctrl:.1f} & {x.gain_dric:.1f} \\\\")
+    (tdir / "rpi.tex").write_text("\n".join(lines + [r"\bottomrule", r"\end{tabular}"]))
+    fig_rpi(cell, HERE / "fig4_rpi.pdf", out)
+    return out
+
+
+def fig_rpi(cell: pd.DataFrame, path: Path, st: dict):
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    plt.rcParams.update({"font.family": "serif", "font.serif": ["Times New Roman", "Times", "DejaVu Serif"],
+                         "mathtext.fontset": "stix", "font.size": 7, "pdf.fonttype": 42, "axes.linewidth": 0.5})
+    pal = {"ETTh1": "#999999", "ETTh2": "#E69F00", "ETTm1": "#56B4E9", "ETTm2": "#D55E00", "Weather": "#009E73",
+           "Exchange": "#0072B2"}
+    fig, axes = plt.subplots(1, 2, figsize=(3.5, 1.8), sharey=True)
+    for ax, (rk, title) in zip(axes, (("rpi_F", "(a) RPI (pre-registered)"), ("orpi_F", "(b) online RPI (exploratory)"))):
+        for ds in DS_ORDER:
+            for H, mk in ((24, "o"), (96, "^")):
+                x = cell[(cell.dataset == ds) & (cell.H == H)]
+                if len(x):
+                    ax.scatter(100 * x[rk], x.gain_ctrl, s=9, marker=mk, color=pal[ds], lw=0.3, edgecolor="k",
+                               label=ds if H == 24 else None)
+        s = st[f"spearman_{rk}_gain_ctrl"]
+        ax.text(0.03, 0.96, rf"$\rho_S={s['rho']:.2f}$", transform=ax.transAxes, va="top", fontsize=6.5)
+        ax.axhline(0, color="k", lw=0.4)
+        ax.axvline(0, color="k", lw=0.4, ls=":")
+        ax.set_title(title, fontsize=7, pad=2)
+        ax.set_xlabel("RPI of $F$ on validation (%)")
+        ax.tick_params(length=2, width=0.4, pad=1)
+        ax.grid(alpha=0.25, lw=0.3)
+    axes[0].set_ylabel("Gain over control (%)")
+    h, l = axes[0].get_legend_handles_labels()
+    fig.legend(h, l, loc="upper center", ncol=len(l), frameon=False, fontsize=6, bbox_to_anchor=(0.5, 1.02),
+               handletextpad=0.1, columnspacing=0.6)
+    fig.tight_layout(rect=(0, 0, 1, 0.9), w_pad=0.4)
+    fig.savefig(path, bbox_inches="tight", pad_inches=0.01)
+
+
 def main():
     rep = Path(sys.argv[1])
     means = pd.read_csv(rep / "means.csv")
@@ -263,6 +349,9 @@ def main():
         out += [f"{NAMES[k]} & {hr[k]['n']} & {100 * hr[k]['harm']:.0f} & {100 * hr[k]['help']:.0f} \\\\" for k in rows]
         (t / "harm.tex").write_text("\n".join(out + ["\\bottomrule", "\\end{tabular}"]))
     fig_delay(means, HERE / "fig3_delay.pdf")
+    st = rpi_analysis(rep, con, t)
+    if st:
+        print(json.dumps({k: st[k] for k in ("n_cells", "H3_preregistered", "H3_theory", "H6")}, indent=1))
     print("tables and figure written")
 
 
