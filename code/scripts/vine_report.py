@@ -8,7 +8,10 @@ Statistics (fixed before the confirmation results; see the amendment table):
     only when all 3 seeds exist. Per-origin loss = MSE over the horizon (channels are already averaged by the
     harness), averaged over seeds at the same origin (seeds are backbone seeds; origins are identical);
   * paired differential d_t = loss_A - loss_B; circular moving-block bootstrap (B = 1000, block = max(2 x season, 2H))
-    and Diebold-Mariano with HAC bandwidth H - 1; a contrast's p-value is the larger of the two (conservative);
+    for the 95% CI, and Diebold-Mariano with HAC bandwidth H - 1 for the p-value. A contrast is significant when its
+    Holm-adjusted DM p-value is below 0.05 AND its bootstrap CI excludes zero. (Amendment 2026-11-16: the first full
+    run used max(p_boot, p_DM); a bootstrap p-value cannot fall below 1/B, so under Holm with m > 50 tests that rule
+    can never reject. The bootstrap is kept as the CI and as a required second check.)
   * Holm over the whole primary table (both co-primary methods, both primary contrasts, every setting), which is
     stricter than Holm within each setting plus across the two methods; secondary contrasts are Holm-corrected
     within their own table;
@@ -88,7 +91,7 @@ def contrast(L: Losses, ds, H, d, a, b, B):
     base = xb.mean()
     return {"dataset": ds, "H": H, "delay": d, "lag": d - H, "a": a, "b": b, "mse_a": xa.mean(), "mse_b": base,
             "rel": xa.mean() / base - 1.0, "rel_lo": bs["ci_low"] / base, "rel_hi": bs["ci_high"] / base,
-            "p_boot": bs["p"], "p_dm": dm["p"], "p": max(bs["p"], dm["p"]), "block": block, "n": len(xa),
+            "p_boot": bs["p"], "p_dm": dm["p"], "p": dm["p"], "block": block, "n": len(xa),
             "confirmation": ds not in DEVELOPMENT}
 
 
@@ -126,6 +129,7 @@ def main(argv=None):
     if prim:
         for r, p in zip(prim, holm([r["p"] for r in prim])):
             r["p_holm"] = float(p)
+            r["sig"] = bool(p < 0.05 and (r["rel_hi"] < 0 or r["rel_lo"] > 0))
     # ---- secondary: co-primary vs each external method and vs DSOF/Proceed; Holm within this table
     sec = []
     for ds, H, d in settings:
@@ -139,6 +143,7 @@ def main(argv=None):
     if sec:
         for r, p in zip(sec, holm([r["p"] for r in sec])):
             r["p_holm"] = float(p)
+            r["sig"] = bool(p < 0.05 and (r["rel_hi"] < 0 or r["rel_lo"] > 0))
     # ---- ablation / sensitivity rows for vine_s (reported, never selected); Holm within table
     abl = []
     for ds, H, d in settings:
@@ -152,6 +157,7 @@ def main(argv=None):
     if abl:
         for r, p in zip(abl, holm([r["p"] for r in abl])):
             r["p_holm"] = float(p)
+            r["sig"] = bool(p < 0.05 and (r["rel_hi"] < 0 or r["rel_lo"] > 0))
     # ---- harm: every method vs frozen in every setting; Holm within this table; harm = significantly worse
     harm = []
     if a.harm:
@@ -164,6 +170,7 @@ def main(argv=None):
         if harm:
             for r, p in zip(harm, holm([r["p"] for r in harm])):
                 r["p_holm"] = float(p)
+            r["sig"] = bool(p < 0.05 and (r["rel_hi"] < 0 or r["rel_lo"] > 0))
     con = pd.DataFrame(prim + sec + abl + harm)
     con.to_csv(a.out / "contrasts.csv", index=False)
 
@@ -238,16 +245,14 @@ def main(argv=None):
     # summary of primary contrasts
     if prim:
         P = pd.DataFrame(prim)
-        hyp["primary_summary"] = (P.assign(win=P.rel < 0, sig_win=(P.rel < 0) & (P.p_holm < 0.05),
-                                           sig_loss=(P.rel > 0) & (P.p_holm < 0.05))
+        hyp["primary_summary"] = (P.assign(win=P.rel < 0, sig_win=(P.rel < 0) & P.sig, sig_loss=(P.rel > 0) & P.sig)
                                   .groupby(["a", "kind", "confirmation"])
                                   .agg(n=("rel", "size"), wins=("win", "sum"), sig_wins=("sig_win", "sum"),
                                        sig_losses=("sig_loss", "sum"), median_rel=("rel", "median"))
                                   .reset_index().to_dict("records"))
     if harm:
         Hm = pd.DataFrame(harm)
-        hyp["harm_rate"] = (Hm.assign(harm=(Hm.rel > 0) & (Hm.p_holm < 0.05),
-                                      help=(Hm.rel < 0) & (Hm.p_holm < 0.05))
+        hyp["harm_rate"] = (Hm.assign(harm=(Hm.rel > 0) & Hm.sig, help=(Hm.rel < 0) & Hm.sig)
                             .groupby("a").agg(n=("rel", "size"), harm=("harm", "mean"), help=("help", "mean"))
                             .reset_index().to_dict("records"))
     (a.out / "hypotheses.json").write_text(json.dumps(hyp, indent=1, default=float))

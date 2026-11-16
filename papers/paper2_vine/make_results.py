@@ -29,6 +29,26 @@ MAIN_ROWS = [["frozen", "persist_seasonal", "periodic", "ogd_head"],
              ["vine_lam", "vine_s"]]
 
 
+def holm(p):
+    p = np.asarray(p, float)
+    order, adj, run = np.argsort(p), np.empty(len(p)), 0.0
+    for k, i in enumerate(order):
+        run = max(run, (len(p) - k) * p[i])
+        adj[i] = min(1.0, run)
+    return adj
+
+
+def finalize(con: pd.DataFrame) -> pd.DataFrame:
+    """Significance rule of the 2026-11-16 amendment (same as vine_report.py): Holm over each family on the DM-HAC
+    p-values, and the bootstrap 95% CI must exclude zero. Idempotent, so older report outputs can be re-scored."""
+    con = con.copy()
+    con["p_holm"] = np.nan
+    for fam, idx in con.groupby("family").groups.items():
+        con.loc[idx, "p_holm"] = holm(con.loc[idx, "p_dm"].values)
+    con["sig"] = (con.p_holm < 0.05) & ((con.rel_hi < 0) | (con.rel_lo > 0))
+    return con
+
+
 def fmt(x, nd=3):
     return "--" if x is None or (isinstance(x, float) and np.isnan(x)) else f"{x:.{nd}f}"
 
@@ -46,7 +66,7 @@ def table_main(means: pd.DataFrame, con: pd.DataFrame, lag: int) -> str:
         best[c] = v[:2]
     sig = {}
     if len(con):
-        p = con[(con.family == "primary") & (con.lag == con.H * lag) & (con.p_holm < 0.05) & (con.rel < 0)]
+        p = con[(con.family == "primary") & (con.lag == con.H * lag) & con.sig & (con.rel < 0)]
         for r in p.itertuples():
             sig.setdefault((r.a, r.dataset, r.H), "")
             sig[(r.a, r.dataset, r.H)] += "\\textsuperscript{\\dag}" if r.kind == "vs_dric_l8" else "\\textsuperscript{\\ddag}"
@@ -98,7 +118,7 @@ def table_primary(con: pd.DataFrame) -> str:
                             cells.append("--"); continue
                         r = r.iloc[0]
                         s = f"{100 * r.rel:+.1f}"
-                        if r.p_holm < 0.05:
+                        if r.sig:
                             s = f"\\textbf{{{s}}}"
                         cells.append(s)
                 out.append(f"{ds}{'$^*$' if ds in DEV else ''} & {H} & " + " & ".join(cells) + " \\\\")
@@ -114,8 +134,8 @@ def table_summary(con: pd.DataFrame, family: str, kinds: list[tuple[str, str, st
         q = con[(con.family == family) & (con.a == a) & (con.kind == kind)]
         if q.empty:
             continue
-        sw = int(((q.rel < 0) & (q.p_holm < 0.05)).sum())
-        sl = int(((q.rel > 0) & (q.p_holm < 0.05)).sum())
+        sw = int(((q.rel < 0) & q.sig).sum())
+        sl = int(((q.rel > 0) & q.sig).sum())
         out.append(f"{label} & {len(q)} & {int((q.rel < 0).sum())} & {sw} & {sl} & "
                    f"{100 * q.rel.median():+.1f} ({100 * q.rel.min():+.1f}, {100 * q.rel.max():+.1f}) \\\\")
     out += ["\\bottomrule", "\\end{tabular}"]
@@ -211,6 +231,8 @@ def main():
     rep = Path(sys.argv[1])
     means = pd.read_csv(rep / "means.csv")
     con = pd.read_csv(rep / "contrasts.csv")
+    con = finalize(con)
+    con.to_csv(rep / "contrasts_final.csv", index=False)
     cost = pd.read_csv(rep / "cost.csv")
     t = HERE / "tables"
     t.mkdir(exist_ok=True)
@@ -232,9 +254,10 @@ def main():
         ("vine_s", "vs_vine_s_g9995", "$\\gamma=0.9998$ vs $0.9995$"),
         ("vine_s", "vs_vine_s_g9999", "$\\gamma=0.9998$ vs $0.9999$")]))
     (t / "cost.tex").write_text(table_cost(cost))
-    hyp = json.loads((rep / "hypotheses.json").read_text())
-    if "harm_rate" in hyp:
-        hr = {r["a"]: r for r in hyp["harm_rate"]}
+    hm = con[con.family == "harm"]
+    if len(hm):
+        g = hm.assign(harm=(hm.rel > 0) & hm.sig, help=(hm.rel < 0) & hm.sig).groupby("a")
+        hr = {a: {"n": len(x), "harm": x.harm.mean(), "help": x.help.mean()} for a, x in g}
         rows = [k for g in MAIN_ROWS for k in g if k in hr]
         out = ["\\begin{tabular}{lccc}", "\\toprule", "Method & Settings & Harm (\\%) & Help (\\%) \\\\", "\\midrule"]
         out += [f"{NAMES[k]} & {hr[k]['n']} & {100 * hr[k]['harm']:.0f} & {100 * hr[k]['help']:.0f} \\\\" for k in rows]
