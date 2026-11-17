@@ -197,13 +197,13 @@ def fig_delay(means: pd.DataFrame, path: Path):
             ax.plot(x, y, ls=ls, color=col, lw=0.9, marker="o", ms=1.8, label=lab)
             ys.append(y.values)
             if y.max() > CAP:
-                off.append(f"{lab} up to {y.max():+.0f}%")
+                off.append(f"{lab} to {y.max():+.0f}%")
         allv = np.concatenate(ys)
         ax.set_ylim(allv.min() - 0.08 * (min(allv.max(), CAP) - allv.min() + 1),
                     min(allv.max(), CAP) + 0.08 * (min(allv.max(), CAP) - allv.min() + 1))
         if off:
-            ax.text(0.97, 0.96, "; ".join(off) + " (off scale)", transform=ax.transAxes, ha="right", va="top",
-                    fontsize=5.5, color="#555555")
+            ax.text(0.97, 0.96, "\n".join(off) + "\n(off scale)", transform=ax.transAxes, ha="right", va="top",
+                    fontsize=5, color="#555555", linespacing=1.0)
         ax.set_xscale("log", base=2)
         ax.set_xticks([1, 2, 4, 8]); ax.set_xticklabels(["1", "2", "4", "8"])
         ax.axhline(0, color="#000000", lw=0.4)
