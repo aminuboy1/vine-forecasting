@@ -1,0 +1,17 @@
+# Exact environment of the runs reported in the papers (lab server, Linux, Python 3.10.12).
+# Hardware: Intel Core i9-10940X (14 cores), 125 GB RAM, NVIDIA GeForce RTX 3090 (driver 580.178.04).
+#
+# Install torch first with the CUDA build that matches your driver, e.g.
+#   pip install torch==2.6.0 --index-url https://download.pytorch.org/whl/cu124
+# or the CPU build:
+#   pip install torch==2.6.0 --index-url https://download.pytorch.org/whl/cpu
+# then:
+#   pip install -r requirements-lock.txt
+#
+# requirements.txt holds the looser lower bounds the code needs; this file pins what the results were produced with.
+numpy==2.2.6
+pandas==2.3.3
+scipy==1.15.3
+PyYAML==6.0.3
+numba==0.68.1
+pytest==9.2.0
