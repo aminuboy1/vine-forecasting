@@ -170,7 +170,7 @@ def main(argv=None):
         if harm:
             for r, p in zip(harm, holm([r["p"] for r in harm])):
                 r["p_holm"] = float(p)
-            r["sig"] = bool(p < 0.05 and (r["rel_hi"] < 0 or r["rel_lo"] > 0))
+                r["sig"] = bool(p < 0.05 and (r["rel_hi"] < 0 or r["rel_lo"] > 0))
     con = pd.DataFrame(prim + sec + abl + harm)
     con.to_csv(a.out / "contrasts.csv", index=False)
 
