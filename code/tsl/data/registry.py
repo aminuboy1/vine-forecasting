@@ -89,7 +89,7 @@ def load_dataset(name: str, channels: list[str] | None = None, max_rows: int | N
     cname = canonical(name)
     if cname not in DATASETS:
         from .loaders import SPECIAL, load_special
-        if cname not in SPECIAL and not cname.startswith("CESNET"):
+        if cname not in SPECIAL:
             raise KeyError(f"unknown dataset {name!r}; known: {list(DATASETS) + SPECIAL}")
         d = load_special(cname, **kwargs)
         if channels is not None:

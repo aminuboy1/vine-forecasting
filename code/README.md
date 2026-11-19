@@ -1,26 +1,22 @@
-# tsl: shared harness for continual (CL-TSF) and online (OTSF) time-series forecasting
+# tsl: leak-checked harness for online forecasting under truthful label delay
 
-Reproducible, leak-checked experimental infrastructure for two TNNLS papers:
-
-1. **Continual forecasting** (paper 1, method SOMA): open-variable streams, a 2-D taskification grid, accuracy matrix,
-   forgetting/BWT/FWT, taskification sensitivity (TSI, Kendall's W, BPS-style), memory-growth accounting.
-2. **Online forecasting under truthful delayed labels** (paper 2, method VINE): P-strict / P-prefix two-channel
-   streams with labels released at s+d (d >= H), assertion-based leak checker, future-perturbation leak test,
-   cumulative/per-horizon error, latency, state bytes, peak memory.
+Experimental infrastructure of the VINE paper: two-channel streams in which the label block of origin s is released
+at s+d (d >= H), an assertion-based leak checker, a future-perturbation leak test, per-origin and per-horizon errors,
+latency, state bytes and peak memory. To reproduce the paper, follow `../docs/reproduce.md`; this file documents the
+harness itself.
 
 Pure PyTorch + NumPy/pandas/SciPy, YAML-configured, seed-controlled, device-agnostic (CPU laptop or CUDA server).
-SOMA and VINE themselves are **stubs** (`tsl/continual/soma.py`, `tsl/online/methods/vine.py`) that document the
-interfaces they plug into and refuse to run until implemented.
+VINE is in `tsl/online/methods/vine.py` and `tsl/online/methods/stack.py`.
 
 ---
 
 ## Quick start on Linux (lab server): one command
 
 ```bash
-git clone <your-private-repo> && cd <repo>/code
+git clone <this repository> && cd <repository>/code
 bash server_setup.sh            # venv in code/.venv; CUDA torch if `nvidia-smi` works, else CPU torch;
-                                # downloads all datasets; runs pytest; runs both smoke configs
-# options: ENV_KIND=conda | SKIP_DATA=1 | TSL_DATA=/scratch/$USER/tsl_data | TORCH_CUDA=cu126 | WITH_TRAFFICSTREAM=1
+                                # downloads the datasets; runs pytest; runs the smoke config
+# options: ENV_KIND=conda | SKIP_DATA=1 | TSL_DATA=/scratch/$USER/tsl_data | TORCH_CUDA=cu126
 source .venv/bin/activate
 python run.py --config configs/online/etth2_delay_sweep.yaml          # a full experiment
 ```
@@ -31,7 +27,7 @@ Manual equivalent:
 python3 -m venv .venv && source .venv/bin/activate
 pip install torch --index-url https://download.pytorch.org/whl/cu126   # or .../whl/cpu ; match your driver
 pip install -r requirements.txt
-python scripts/download_all.py          # ~4.5 GB incl. CESNET extraction; see DATASETS.md
+python scripts/download_tslib.py        # ETT, Weather, Exchange, ECL, Traffic (checksum-verified); see DATASETS.md
 python -m pytest tests -q
 python run.py --config configs/online/smoke_etth2.yaml
 ```
@@ -40,7 +36,7 @@ Multi-GPU servers: runs are single-process; launch independent configs/seeds on 
 `CUDA_VISIBLE_DEVICES=0 python run.py --config A.yaml --seeds 0 & CUDA_VISIBLE_DEVICES=1 python run.py --config A.yaml --seeds 1 &`.
 `runtime.device: auto` picks CUDA when available; set `--set runtime.device=cpu` to force CPU.
 
-## Windows laptop (primary execution target: i7-8550U, 16 GB, no CUDA)
+## Windows laptop (CPU only)
 
 PowerShell:
 
@@ -52,7 +48,6 @@ py -3.12 -m venv .venv
 .\.venv\Scripts\python scripts\download_all.py
 .\.venv\Scripts\python -m pytest tests -q
 .\.venv\Scripts\python run.py --config configs\online\smoke_etth2.yaml
-.\.venv\Scripts\python run.py --config configs\continual\smoke_etth2.yaml
 $env:TSL_THREADS = "4"   # optional: threads for pretraining/batched inference (default = physical cores)
 ```
 
@@ -76,19 +71,17 @@ See the bottom of this file ("Smoke-test timings") for the measured numbers and 
 code/
   run.py                      # experiment runner: --config, --seeds, --set key=value, --out
   server_setup.sh             # Linux one-shot bootstrap
-  configs/online/*.yaml       # paper 2 (delay sweeps per dataset, prefix, provisional, leaky appendix, val tuning)
-  configs/continual/*.yaml    # paper 1 (Energy/PEMS/ECL-Churn/CESNET/SynthRegimes taskification grids)
+  configs/online/*.yaml       # (delay sweeps per dataset, prefix, provisional, leaky appendix, val tuning)
   scripts/                    # download_*.py (pinned checksums), significance.py (Holm-corrected tests)
-  tsl/data/                   # registry + loaders (TSLib CSVs, OPSD, UCI ECL-Churn, -Stream npz, CESNET), splits, synth
+  tsl/data/                   # registry + loaders (TSLib CSVs, OPSD), splits, windows
   tsl/models/                 # DLinear, PatchTST, iTransformer (+RevIN), offline pretraining with checkpoint cache
   tsl/online/                 # protocol, evaluator, forecast archive, leak test, provisional inputs, methods/
-  tsl/continual/              # open-variable stream, taskifications, learners, evaluator, metrics, SOMA stub
   tsl/stats.py                # Diebold-Mariano (HAC + HLN), Wilcoxon, Holm, moving-block bootstrap
-  tests/                      # 86 pytest tests (leakage proofs, protocol, metrics, learners)
+  tests/                      # pytest tests (leakage proofs, protocol, metrics, VINE, faithful ports)
   results/                    # outputs (git-ignored)
 ```
 
-## Online harness (paper 2)
+## Online harness
 
 **Protocol** (`tsl/online/protocol.py`). Inputs x and settled labels y are separate channels (identical in public
 benchmarks; different in the provisional stress test). At time s the model forecasts y[s+1..s+H] from x[s-L+1..s].
@@ -137,38 +130,17 @@ curves, cumulative-MSE curve, per-origin losses (for DM / block-bootstrap tests)
 (single core), predict latency, state bytes (learned / pending / raw), peak RSS (process-wide; set
 `protocol.trace_memory: true` for a per-run tracemalloc peak).
 
-## Continual harness (paper 1)
-
-* **Stream** (`tsl/continual/stream.py`): availability matrix A (T, C) from natural births/deaths/missingness plus optional
-  controlled schedules (`expand`, `expand_remove`, `retire`, `sets`); per-window per-variable admissibility masks; fixed
-  evaluation partition with per-segment train | gap | val | gap | test (6:2:2 default).
-* **Taskifications**: `calendar` (day/week/month/quarter/halfyear/year), `fixed` (`size` rows or `days`), `periods`
-  (source periods, `n` per task), `task_free` (micro-arrivals, no task ids, no boundaries), `boundaries` (explicit), and
-  `jitter_days` for boundary-perturbation robustness. All taskifications deliver exactly the same training windows (tested).
-* **Evaluation**: at each segment end, the state after the last arrival ending at or before it is scored on all test
-  sets -> R[i, j]; global masked means; per-variable and per-horizon tensors (`tensors.npz`), original-unit MAE/MSE.
-* **Metrics**: AE (avg over seen segments), LA (legacy -Stream), forgetting (Filat), BWT, FWT (vs random init) and
-  FWT_rel (vs frozen-first-period model), TSI, Kendall's tau and W across taskifications, BPS-style profile dispersion,
-  parameter/state/raw-window bytes per checkpoint, train wall-clock.
-* **Learners** (`tsl/continual/learners.py`), generic wrappers around any backbone: `finetune`, `frozen_after_first`,
-  `joint` (re-init + retrain on all data at each checkpoint; upper bound), `er` (reservoir), `derpp`, `ewc` (online),
-  `si`, `lwf`. Boundary-requiring methods consolidate at task boundaries, or at every arrival end in task-free mode
-  (`consolidate_every: 1`). New learners subclass `ContinualLearner` (`observe(segment)`, `predict(x, mask)`,
-  `on_checkpoint()`, `state_breakdown()`) and register with `@register("name")`.
-
 ## Running experiments
 
 ```bash
 python run.py --config configs/online/etth2_delay_sweep.yaml --seeds 0 1 2
 python run.py --config configs/online/prefix_etth2.yaml --set "horizons=[24]"
-python run.py --config configs/continual/energy_stream.yaml --set learner_defaults.epochs=3
 python scripts/significance.py results/etth2_delay_sweep --reference frozen        # DM per cell + Wilcoxon, Holm
-python scripts/significance.py results/energy_stream_grid --metric final_avg_mse --reference finetune
 ```
-Outputs: `results/<name>/summary.csv`, per-run JSON (config, environment, git commit, timings), `steps.npz` (online),
-`tensors.npz` and `bps_seed*.json` / `bps_seed_mean.json` (continual), `timing.json`.
+Outputs: `results/<name>/summary.csv`, per-run JSON (config, environment, git commit, timings), `steps.npz`,
+`timing.json`.
 
-## Smoke-test timings (measured on this laptop; numbers are NOT results)
+## Smoke-test timings (measured on a laptop early in the project, before VINE existed; numbers are NOT results)
 
 Machine: i7-8550U (4C/8T), 16 GB, Windows 11, torch 2.15 CPU. **The CPU was ~50% busy with other processes during all
 measurements**, so expect somewhat faster runs on an idle machine; re-time with the smoke configs before planning.
@@ -176,9 +148,7 @@ Online per-step loop single-threaded (`online_threads: 1`); pretraining used 4 t
 
 | What | Wall-clock |
 |---|---|
-| `pytest tests -q` (86 tests) | ~65 s |
 | Online smoke: ETTh2, DLinear (3 epochs), H=24, d in {24, 96}, 3,000 forecasts x 6 methods | 101 s total |
-| Continual smoke: ETTh2 (12 months), 4 eval segments, churn schedule, 4 taskifications x 8 learners, <= 20 steps/arrival | 65 s total |
 | Probe: ECL (321 ch), H=24, d=24, 1,000 forecasts | 52 s incl. 2-epoch pretraining |
 
 Per-step costs (ETTh2, C=7, H=24; median update / mean predict): frozen ~2 us / 3 us; RLS bank ~175 us / 70 us;
@@ -193,8 +163,6 @@ State: RLS 43 KiB (d=H) - 91 KiB (d=4H); ELF ~0.5-0.8 MiB on ETTh2 (dominated by
 * ECL (~19.7k forecasts): frozen + RLS + ELF + head-OGD ~5-6 min per cell at H=24 and ~3-4x at H=96 -> the ECL sweep
   (27 cells) ~6-9 h; Traffic (862 ch) ~2.5-3x ECL -> run overnight or restrict to H in {24, 48} on the laptop.
 * Deep per-step baselines with PatchTST/iTransformer cost 5-20x DLinear per step: narrow streams only on the laptop.
-* Continual grids scale with (arrivals x steps per arrival x learners x taskifications); time one taskification
-  with `--set "continual.taskifications={calendar: {kind: periods}}"` before launching a grid.
 
 Smoke numbers (ETTh2, first 3,000 test forecasts, DLinear trained 3 epochs, 1 seed; sanity check only):
 

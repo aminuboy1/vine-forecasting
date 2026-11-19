@@ -1,2 +1,2 @@
-"""tsl: shared harness for continual (CL-TSF) and online (OTSF) time-series forecasting experiments."""
+"""tsl: leak-checked harness for online time-series forecasting under truthful label delay (VINE paper)."""
 __version__ = "0.1.0"

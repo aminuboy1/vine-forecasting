@@ -1,7 +1,7 @@
 """Compact, clean re-implementations of three standard backbones.
 
 All models map x: (B, L, C) -> y: (B, H, C), are channel-count agnostic (so they work with
-variable-set changes in the continual harness) and expose:
+variable-set changes) and expose:
   * `head_parameters()`  -> parameters of the final projection (for "last-layer" online updates)
   * optional `channel_mask` (B, C) bool argument (True = channel present). DLinear and PatchTST are
     channel-independent so the mask only matters for iTransformer (key padding in attention).

@@ -55,8 +55,8 @@ PY
 
 echo "== [4/6] Datasets (TSL_DATA=${TSL_DATA:-$CODE_DIR/data})"
 if [[ "${SKIP_DATA:-0}" != "1" ]]; then
-  "$PYBIN" scripts/download_all.py ${WITH_TRAFFICSTREAM:+--with-trafficstream} \
-    || echo "WARNING: some downloads failed (see above). Google Drive may rate-limit; re-run later."
+  "$PYBIN" scripts/download_all.py \
+    || echo "WARNING: some downloads failed (see above). re-run later."
 fi
 
 echo "== [5/6] Unit tests (leakage proofs, harness)"
@@ -64,5 +64,4 @@ echo "== [5/6] Unit tests (leakage proofs, harness)"
 
 echo "== [6/6] Smoke runs (tiny; numbers are NOT results)"
 "$PYBIN" run.py --config configs/online/smoke_etth2.yaml --quiet
-"$PYBIN" run.py --config configs/continual/smoke_etth2.yaml --quiet
 echo "Done. Activate with: source $CODE_DIR/.venv/bin/activate (or: conda activate tsl)"

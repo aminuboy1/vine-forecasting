@@ -100,7 +100,7 @@ def main(argv=None):
     ap.add_argument("results", type=Path)
     ap.add_argument("--reference", default=None, help="compare every method against this one")
     ap.add_argument("--all-pairs", action="store_true")
-    ap.add_argument("--metric", default=None, help="online: se|ae (default se); continual: summary column")
+    ap.add_argument("--metric", default=None, help="se|ae (default se)")
     ap.add_argument("--alpha", type=float, default=0.05)
     ap.add_argument("--block", type=int, default=48, help="bootstrap block length (e.g. 2 x seasonal period)")
     ap.add_argument("--boot", type=int, default=1000, help="bootstrap replicates")

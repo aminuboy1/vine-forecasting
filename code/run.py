@@ -2,9 +2,8 @@
 
     python run.py --config configs/online/smoke_etth2.yaml
     python run.py --config configs/online/etth2_main.yaml --seeds 0 1 2 --set runtime.threads=4
-    python run.py --config configs/continual/smoke_etth2.yaml --set L=48 --set H=12
 
-The YAML must set `harness: online | continual`. Results go to <output.dir>/<name>/ (default
+The YAML must set `harness: online`. Results go to <output.dir>/<name>/ (default
 code/results/<name>/): JSON per run, summary.csv, and (online) per-step losses in steps.npz.
 """
 from __future__ import annotations
@@ -45,40 +44,14 @@ def main(argv=None):
         if harness == "online":
             from tsl.online.experiment import run_online
             run_online(cfg, s, out, verbose=not args.quiet)
-        elif harness == "continual":
-            from tsl.continual.experiment import run_cl
-            run_cl(cfg, s, out, verbose=not args.quiet)
         else:
-            raise SystemExit(f"config must set harness: online|continual (got {harness!r})")
+            raise SystemExit(f"config must set harness: online (got {harness!r}); the continual harness of the "
+                             "companion SOMA paper lives in its own repository")
         per_seed[s] = time.perf_counter() - ts
         print(f"== seed {s} done in {per_seed[s]:.1f}s", flush=True)
-    if harness == "continual" and len(seeds) >= 1:
-        _aggregate_bps(run_dir)
     wall = time.perf_counter() - t0
     save_json({"wall_seconds_total": wall, "wall_seconds_per_seed": per_seed}, run_dir / "timing.json")
     print(f"== all done in {wall:.1f}s -> {run_dir}")
-
-
-def _aggregate_bps(run_dir: Path):
-    """Seed-averaged BPS-style analysis per dataset."""
-    import numpy as np
-    from tsl.continual.metrics import boundary_profile_sensitivity
-    for ds_dir in [p for p in run_dir.iterdir() if p.is_dir() and not p.name.startswith("_")]:
-        acc: dict = {}
-        for f in ds_dir.glob("*/*/seed*/result.json"):
-            r = json.loads(f.read_text())
-            tk, lr = f.parts[-4], f.parts[-3]
-            acc.setdefault(tk, {}).setdefault(lr, []).append(r["metrics_mse"])
-        if len(acc) < 2:
-            continue
-        avg = {}
-        for tk, d in acc.items():
-            avg[tk] = {}
-            for lr, ms in d.items():
-                keys = [k for k in ms[0] if isinstance(ms[0][k], (int, float))]
-                avg[tk][lr] = {k: float(np.mean([m[k] for m in ms if k in m])) for k in keys}
-                avg[tk][lr]["avg_seen_curve"] = np.mean([m["avg_seen_curve"] for m in ms], 0).tolist()
-        save_json(boundary_profile_sensitivity(avg), ds_dir / "bps_seed_mean.json")
 
 
 if __name__ == "__main__":
